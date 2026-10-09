@@ -5,14 +5,11 @@
 from __future__ import annotations
 
 from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.units import inch
 from reportlab.lib.colors import Color
 
-pdfmetrics.registerFont(TTFont("EB", "/tmp/fonts/EBGaramond-Regular.ttf"))
-pdfmetrics.registerFont(TTFont("EBI", "/tmp/fonts/EBGaramond-RegularItalic.ttf"))
-pdfmetrics.registerFont(TTFont("EBB", "/tmp/fonts/EBGaramond-Bold.ttf"))
+# Built-in fonts. Render does not have the local Garamond files.
+EB, EBI, EBB = "Times-Roman", "Times-Italic", "Times-Bold"
 
 SLATE = Color(0x33 / 255, 0x40 / 255, 0x4F / 255)
 GOLD = Color(0xD9 / 255, 0x9A / 255, 0x1B / 255)
@@ -31,15 +28,12 @@ SEE_SECTIONS = [
     ("What I Hope You Carry", "what I want left with you", [7, 8]),
 ]
 
-
 def clean(text: str) -> str:
     return " ".join((text or "").replace("—", ", ").replace("–", ", ").split())
-
 
 def answers_from(payload: dict) -> list[str]:
     raw = payload.get("answers") or []
     return [clean(a) for a in raw]
-
 
 def run(payload: dict, out_path: str) -> str:
     product = payload.get("product") or "gave"
