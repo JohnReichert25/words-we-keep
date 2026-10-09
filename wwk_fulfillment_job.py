@@ -110,45 +110,45 @@ def run(payload: dict, out_path: str) -> str:
 
     slate()
     c.setFillColor(GOLD)
-    c.setFont("EB", 9)
+    c.setFont(EB, 9)
     c.drawCentredString(W / 2, H - 1.35 * inch, "W O R D S    W E    K E E P")
     rule(W / 2, H - 1.58 * inch)
-    c.setFont("EBI", 11)
+    c.setFont(EBI, 11)
     c.drawCentredString(W / 2, H - 1.9 * inch, "A keepsake for")
-    c.setFont("EBB", 26)
+    c.setFont(EBB, 26)
     c.drawCentredString(W / 2, H / 2 + 10, title)
     rule(W / 2, H / 2 - 28)
-    c.setFont("EBI", 12)
+    c.setFont(EBI, 12)
     c.drawCentredString(W / 2, H / 2 - 54, f"For {recipient}, from {writer}")
     c.showPage()
 
     cream()
     c.setFillColor(GOLD)
-    c.setFont("EBI", 12)
+    c.setFont(EBI, 12)
     c.drawCentredString(W / 2, H / 2 + 0.45 * inch, "For")
-    c.setFont("EBB", 28)
+    c.setFont(EBB, 28)
     c.drawCentredString(W / 2, H / 2, recipient)
-    c.setFont("EBI", 13)
+    c.setFont(EBI, 13)
     c.drawCentredString(W / 2, H / 2 - 0.4 * inch, f"from {writer}")
     c.showPage()
 
     def block(name, sub, lines, y):
         c.setFillColor(SLATE)
-        c.setFont("EBB", 14)
+        c.setFont(EBB, 14)
         c.drawCentredString(W / 2, y, name)
         y -= 16
-        c.setFont("EBI", 9)
+        c.setFont(EBI, 9)
         c.drawCentredString(W / 2, y, sub)
         y -= 14
         rule(W / 2, y)
         y -= 24
         for n, text in enumerate(lines, 1):
             c.setFillColor(GOLD)
-            c.setFont("EBB", 10)
+            c.setFont(EBB, 10)
             c.drawString(0.72 * inch, y, str(n))
             c.setFillColor(SLATE)
-            c.setFont("EB", 12)
-            for line in wrap(text, "EB", 12, W - 1.85 * inch):
+            c.setFont(EB, 12)
+            for line in wrap(text, EB, 12, W - 1.85 * inch):
                 c.drawString(1.02 * inch, y, line)
                 y -= 16
             y -= 12
@@ -162,33 +162,33 @@ def run(payload: dict, out_path: str) -> str:
             if j == 0:
                 y -= 16
         c.setFillColor(SLATE)
-        c.setFont("EB", 8)
+        c.setFont(EB, 8)
         c.drawCentredString(W / 2, 0.55 * inch, str(i))
         c.showPage()
 
     cream()
     c.setFillColor(SLATE)
-    c.setFont("EBB", 16)
+    c.setFont(EBB, 16)
     c.drawCentredString(W / 2, H / 2 + 1.2 * inch, "A Closing Note")
     rule(W / 2, H / 2 + 0.85 * inch)
-    c.setFont("EB", 12)
+    c.setFont(EB, 12)
     y = H / 2 + 0.5 * inch
     note = f"{recipient}, {closing}" if closing else f"{recipient}."
-    for line in wrap(note, "EB", 12, W - 1.6 * inch):
+    for line in wrap(note, EB, 12, W - 1.6 * inch):
         c.drawString(0.8 * inch, y, line)
         y -= 16
-    c.setFont("EBI", 12)
+    c.setFont(EBI, 12)
     c.drawString(0.8 * inch, y - 16, "With love,")
     c.drawString(0.8 * inch, y - 32, writer)
     c.showPage()
 
     slate()
     c.setFillColor(GOLD)
-    c.setFont("EB", 11)
+    c.setFont(EB, 11)
     c.drawCentredString(W / 2, H / 2 + 36, "WORDS WE KEEP")
-    c.setFont("EBI", 10)
+    c.setFont(EBI, 10)
     c.drawCentredString(W / 2, H / 2 + 8, "Real words, written just for them.")
-    c.setFont("EBI", 9)
+    c.setFont(EBI, 9)
     c.drawCentredString(W / 2, H / 2 - 28, f"Created from {writer}'s memories for {recipient}")
     c.drawCentredString(W / 2, H / 2 - 46, "Just because.")
     if date:
