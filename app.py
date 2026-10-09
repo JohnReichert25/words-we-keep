@@ -8,6 +8,8 @@ import re
 import smtplib
 import tempfile
 import threading
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -19,15 +21,31 @@ def health():
     return {"ok": True, "service": "words-we-keep"}
 
 
-def _pick(raw: dict, *names):
-    # Jotform rawRequest keys look like "q3_writer"; match on the name suffix.
+FORMS = {
+    # formID: (product for run(), title, visible memory question ids in display order)
+    "262695808087068": ("gave", "Words We Keep — What You Gave Me", [35, 38, 39, 40, 43, 44, 46, 33, 49]),
+    "262696525171160": ("see", "Words We Keep — What I See in You", [35, 36, 37, 38, 43, 45, 47, 34, 49]),
+}
+# Fixed field ids shared by both forms.
+F_ORDER, F_WRITER, F_RECIPIENT, F_CALL, F_RELATION, F_OCCASION, F_NOTES, F_PHOTOS = 3, 4, 5, 6, 7, 8, 30, 31
+
+
+def _text(val) -> str:
+    if isinstance(val, dict):
+        return " ".join(str(v) for v in val.values() if v)
+    if isinstance(val, list):
+        return " ".join(str(v) for v in val if v)
+    return str(val or "").strip()
+
+
+def _by_qid(raw: dict) -> dict:
+    # rawRequest keys look like "q35_typeA35"; key on the numeric qN prefix.
+    out = {}
     for key, val in raw.items():
-        base = re.sub(r"^q\d+_", "", key).lower()
-        if base in names:
-            if isinstance(val, dict):
-                val = " ".join(str(v) for v in val.values() if v)
-            return val
-    return None
+        m = re.match(r"q(\d+)_", key)
+        if m:
+            out[int(m.group(1))] = val
+    return out
 
 
 def parse_jotform(form: dict) -> dict:
@@ -37,18 +55,26 @@ def parse_jotform(form: dict) -> dict:
         raw = json.loads(form.get("rawRequest") or "{}")
     except ValueError:
         raw = {}
-    for field in ("product", "writer", "recipient", "date"):
-        if not payload.get(field):
-            val = _pick(raw, field)
-            if val:
-                payload[field] = val
-    if not payload.get("answers"):
-        answers = [raw[k] for k in sorted(raw, key=lambda k: int(re.match(r"q(\d+)_", k).group(1)))
-                   if re.match(r"q\d+_(answer|question|q)\d*", k, re.I) and isinstance(raw[k], str)]
-        if answers:
-            payload["answers"] = answers
-    order = payload.get("etsy_order") or _pick(raw, "etsyorder", "etsy_order", "etsyordernumber", "ordernumber", "order")
-    payload["_etsy_order"] = str(order) if order else ""
+    q = _by_qid(raw)
+    form_id = str(form.get("formID") or raw.get("formID") or "")
+    product, title, qids = FORMS.get(form_id, (None, None, None))
+    if product:
+        payload["product"] = product
+        payload["_title"] = title
+    elif q:  # fallback for unknown forms: all q33+ fields except notes/photos, in id order
+        qids = [n for n in sorted(q) if n >= 33]
+    for field, qid in (("writer", F_WRITER), ("recipient", F_RECIPIENT), ("call_name", F_CALL),
+                       ("relationship", F_RELATION), ("occasion", F_OCCASION), ("notes", F_NOTES)):
+        if not payload.get(field) and _text(q.get(qid)):
+            payload[field] = _text(q.get(qid))
+    if not payload.get("answers") and qids:
+        payload["answers"] = [_text(q.get(n)) for n in qids]
+    photos = q.get(F_PHOTOS)
+    payload["photos"] = photos if isinstance(photos, list) else ([photos] if photos else [])
+    if not payload.get("date"):
+        # Date printed on the PDF is the order/submission date.
+        payload["date"] = datetime.now(ZoneInfo("America/New_York")).strftime("%B %-d, %Y")
+    payload["_etsy_order"] = _text(q.get(F_ORDER)) or _text(payload.get("etsy_order"))
     return payload
 
 
@@ -80,7 +106,7 @@ def process(form: dict) -> None:
         fd, out = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
         run(payload, out)
-        title = form.get("formTitle") or form.get("formID") or "unknown form"
+        title = payload.get("_title") or form.get("formTitle") or form.get("formID") or "unknown form"
         subject = f"Words We Keep submission: {title}"
         if payload["_etsy_order"]:
             subject += f" — {payload['_etsy_order']}"
