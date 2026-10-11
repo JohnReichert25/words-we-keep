@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, send_file
 from wwk_fulfillment_job import run
 from email.message import EmailMessage
 import json
@@ -106,6 +106,7 @@ def process(form: dict) -> None:
         fd, out = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
         run(payload, out)
+        log.info("Built keepsake PDF (formID=%s, %d bytes)", form.get("formID"), os.path.getsize(out))
         title = payload.get("_title") or form.get("formTitle") or form.get("formID") or "unknown form"
         subject = f"Words We Keep submission: {title}"
         if payload["_etsy_order"]:
@@ -120,5 +121,12 @@ def process(form: dict) -> None:
 @app.post("/jotform")
 def jotform():
     form = request.get_json(silent=True) or request.form.to_dict()
+    # Manual/test POSTs can ask for the PDF back directly: /jotform?pdf=1
+    if request.args.get("pdf") == "1":
+        payload = parse_jotform(form)
+        fd, out = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        run(payload, out)
+        return send_file(out, mimetype="application/pdf", as_attachment=True, download_name="keepsake.pdf")
     threading.Thread(target=process, args=(form,), daemon=True).start()
     return {"ok": True}, 200
