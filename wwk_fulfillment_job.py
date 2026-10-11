@@ -40,6 +40,15 @@ SEE_SECTIONS = [
 def clean(text: str) -> str:
     return " ".join((text or "").replace("—", ", ").replace("–", ", ").split())
 
+def nice_date(text: str) -> str:
+    """'2026-10-11' -> 'October 11, 2026'; other formats pass through."""
+    from datetime import datetime
+    try:
+        d = datetime.strptime(text.strip()[:10], "%Y-%m-%d")
+        return f"{d:%B} {d.day}, {d.year}"
+    except ValueError:
+        return text
+
 def answers_from(payload: dict) -> list[str]:
     raw = payload.get("answers") or []
     return [clean(a) for a in raw]
@@ -197,6 +206,9 @@ def run(payload: dict, out_path: str) -> str:
     closing = ". ".join(used[:3])
     if closing and not closing.endswith("."):
         closing += "."
+    # Optional explicit closing summation; the Jotform forms have no closing-note
+    # question, so production falls back to the derived text above.
+    closing_note = clean(payload.get("closing_note") or "")
 
     sid = str(payload.get("submissionID") or "")
     if "dedication_photo" in payload or "closing_photo" in payload:
@@ -331,23 +343,57 @@ def run(payload: dict, out_path: str) -> str:
         c.showPage()
 
     cream()
+    # Closing page, laid out to match the approved listing image (closing-sample-2000.png).
+    top = 0  # distance from top of page, in points
     if clo_img is not None:
-        # Closing photo above the closing note heading (space above it is otherwise empty).
-        draw_photo(clo_img, 1.1 * inch, H / 2 + 1.55 * inch, W - 2.2 * inch, H / 2 - 2.5 * inch)
+        draw_photo(clo_img, 79, H - 212, W - 158, 144)
         placed += 1
+        top = 238
+    else:
+        top = 1.6 * inch
     c.setFillColor(SLATE)
     c.setFont(EBB, 16)
-    c.drawCentredString(W / 2, H / 2 + 1.2 * inch, "A Closing Note")
-    rule(W / 2, H / 2 + 0.85 * inch)
-    c.setFont(EB, 12)
-    y = H / 2 + 0.5 * inch
-    note = f"{recipient}, {closing}" if closing else f"{recipient}."
-    for line in wrap(note, EB, 12, W - 1.6 * inch):
-        c.drawString(0.8 * inch, y, line)
-        y -= 16
-    c.setFont(EBI, 12)
-    c.drawString(0.8 * inch, y - 16, "With love,")
-    c.drawString(0.8 * inch, y - 32, writer)
+    c.drawCentredString(W / 2, H - top, "A Closing Note")
+    rule(W / 2, H - top - 25)
+    c.setFillColor(GOLD)
+    c.setFont(EBI, 22)
+    c.drawCentredString(W / 2, H - top - 91, "These are the words I keep.")
+    c.setFillColor(SLATE)
+    c.setFont(EBI, 15)
+    c.drawCentredString(W / 2, H - top - 123, f"For {recipient}, from {writer}")
+    c.setStrokeColor(GOLD)
+    c.setLineWidth(0.8)
+    c.line(W / 2 - 20, H - top - 147, W / 2 + 20, H - top - 147)
+    date_y = 76
+    summ = closing_note or closing
+    if summ:
+        width = W - 2.0 * inch
+        y0 = H - top - 188
+        floor_y = date_y + 34
+        size = 17
+        while True:
+            lead = size * 1.7
+            lines = wrap(summ, EB, size, width)
+            fit = int((y0 - floor_y) // lead) + 1
+            if len(lines) <= fit or size <= 11:
+                break
+            size -= 0.5
+        if len(lines) > fit:
+            lines = lines[:fit]
+            last = lines[-1].rstrip(" .,;:") + "\u2026"
+            while c.stringWidth(last, EB, size) > width and " " in last:
+                last = last.rsplit(" ", 1)[0].rstrip(" .,;:") + "\u2026"
+            lines[-1] = last
+        c.setFillColor(SLATE)
+        c.setFont(EB, size)
+        y = y0
+        for line in lines:
+            c.drawCentredString(W / 2, y, line)
+            y -= lead
+    if date:
+        c.setFillColor(GOLD)
+        c.setFont(EB, 13)
+        c.drawCentredString(W / 2, date_y, nice_date(date))
     c.showPage()
 
     slate()
