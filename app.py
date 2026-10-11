@@ -8,6 +8,7 @@ import re
 import smtplib
 import tempfile
 import threading
+import urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -96,6 +97,9 @@ def _find_photos(form: dict, raw: dict) -> list:
                 found += [m.group(0) for m in UPLOAD_RE.finditer(s)]
     out = []
     for u in found:
+        path = urllib.parse.urlsplit(u).path
+        if "/uploads/" not in path or not re.search(r"\.(?:jpe?g|png)$", path, re.I):
+            continue
         if u not in out:
             out.append(u)
     return out[:2]

@@ -11,6 +11,7 @@ from reportlab.lib.utils import ImageReader
 import io
 import logging
 import re
+import urllib.parse
 import urllib.request
 
 log = logging.getLogger("wwk")
@@ -55,24 +56,106 @@ def photo_urls(raw) -> list[str]:
                 out.append(part)
     return out
 
-def fetch_photo(src: str):
+def _safe(url: str) -> str:
+    return url.split("?")[0].split("#")[0]
+
+def _get(url: str, headers: dict | None = None):
+    """Return (bytes|None, status, content_type). Never raises; reads at most 15MB+1."""
+    import urllib.error
+    req = urllib.request.Request(url, headers={"User-Agent": "WordsWeKeep/1.0", **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.read(MAX_PHOTO_BYTES + 1), r.status, r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        return None, e.code, e.headers.get("Content-Type", "") if e.headers else ""
+    except Exception as e:
+        return None, type(e).__name__, ""
+
+def _is_image(data, ctype) -> bool:
+    if not data or len(data) > MAX_PHOTO_BYTES:
+        return False
+    if (ctype or "").lower().startswith("image/"):
+        return True
+    try:
+        from PIL import Image
+        Image.open(io.BytesIO(data))
+        return True
+    except Exception:
+        return False
+
+def _with_key(url: str, key: str) -> str:
+    return url + ("&" if "?" in url else "?") + urllib.parse.urlencode({"apiKey": key})
+
+def _is_jotform_upload(url: str) -> bool:
+    u = urllib.parse.urlsplit(url)
+    return (u.hostname or "").lower().endswith("jotform.com") and "/uploads/" in u.path
+
+def _fetch_with_key(url: str, key: str):
+    data, st, ct = _get(_with_key(url, key))
+    if _is_image(data, ct):
+        return data
+    log.warning("Photo apiKey-param download failed for %s (status=%s, content-type=%s)", _safe(url), st, ct)
+    data, st, ct = _get(url, {"APIKEY": key})
+    if _is_image(data, ct):
+        return data
+    log.warning("Photo APIKEY-header download failed for %s (status=%s, content-type=%s)", _safe(url), st, ct)
+    return None
+
+def _api_upload_urls(submission_id: str, key: str) -> list[str]:
+    import json
+    api = f"https://api.jotform.com/submission/{urllib.parse.quote(str(submission_id))}"
+    data, st, ct = _get(_with_key(api, key))
+    if not data:
+        log.warning("Jotform API submission lookup failed (status=%s, content-type=%s)", st, ct)
+        return []
+    try:
+        answers = (json.loads(data).get("content") or {}).get("answers") or {}
+    except Exception:
+        log.warning("Jotform API submission lookup returned non-JSON (status=%s, content-type=%s)", st, ct)
+        return []
+    pat = re.compile(r"https?://[^\s\"',]+/uploads/[^\s\"',]+\.(?:jpe?g|png)", re.I)
+    out = []
+    for m in pat.finditer(json.dumps(answers).replace("\\/", "/")):
+        if m.group(0) not in out:
+            out.append(m.group(0))
+    return out
+
+def fetch_photo(src: str, submission_id: str = ""):
     """Return an ImageReader for a JPEG/PNG URL or local path, or None (never raises)."""
     try:
         from PIL import Image
+        import os
+        key = os.environ.get("JOTFORM_API_KEY") or ""
         if src.startswith(("http://", "https://")):
-            req = urllib.request.Request(src, headers={"User-Agent": "WordsWeKeep/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = r.read(MAX_PHOTO_BYTES + 1)
+            data = None
+            if key and _is_jotform_upload(src):
+                data = _fetch_with_key(src, key)
+                if data is None and submission_id:
+                    name = _safe(src).rsplit("/", 1)[-1].lower()
+                    alts = _api_upload_urls(submission_id, key)
+                    alts.sort(key=lambda u: _safe(u).rsplit("/", 1)[-1].lower() != name)
+                    for alt in alts:
+                        data = _fetch_with_key(alt, key)
+                        if data is not None:
+                            break
+                if data is None:
+                    log.warning("Photo skipped: all keyed downloads failed for %s", _safe(src))
+                    return None
+            else:
+                data, st, ct = _get(src)
+                if not _is_image(data, ct):
+                    log.warning("Photo skipped: download failed for %s (status=%s, content-type=%s)", _safe(src), st, ct)
+                    return None
         else:
             path = src[7:] if src.startswith("file://") else src
             with open(path, "rb") as f:
                 data = f.read(MAX_PHOTO_BYTES + 1)
         if len(data) > MAX_PHOTO_BYTES:
-            log.warning("Photo skipped: larger than 15MB (%s)", src.split("?")[0])
+            log.warning("Photo skipped: larger than 15MB (%s)", _safe(src))
             return None
         img = Image.open(io.BytesIO(data))
         if img.format not in ("JPEG", "PNG"):
-            log.warning("Photo skipped: unsupported type %s (%s)", img.format, src.split("?")[0])
+            log.warning("Photo skipped: unsupported type %s (%s)", img.format, _safe(src))
             return None
         try:
             from PIL import ImageOps
@@ -87,7 +170,7 @@ def fetch_photo(src: str):
         buf.seek(0)
         return ImageReader(buf)
     except Exception as e:
-        log.warning("Photo skipped: could not load %s (%s)", src.split("?")[0], type(e).__name__)
+        log.warning("Photo skipped: could not load %s (%s)", _safe(src), type(e).__name__)
         return None
 
 def run(payload: dict, out_path: str) -> str:
@@ -117,7 +200,7 @@ def run(payload: dict, out_path: str) -> str:
 
     photos = []
     for src in photo_urls(payload.get("photos"))[:2]:
-        img = fetch_photo(src)
+        img = fetch_photo(src, str(payload.get("submissionID") or ""))
         if img is not None:
             photos.append(img)
     placed = 0
