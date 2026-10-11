@@ -365,28 +365,57 @@ def run(payload: dict, out_path: str) -> str:
     c.setLineWidth(0.8)
     c.line(W / 2 - 20, H - top - 147, W / 2 + 20, H - top - 147)
     date_y = 76
-    summ = closing_note or closing
+    # Summation: always 3-4 lines, built only from the buyer's own words.
+    # 1) closing_note if given; 2) top up with the opening sentence(s) of the
+    # memory answers, in order, until >= 3 lines; 3) cap at 4 lines by shrinking
+    # the font to a floor, then trimming at a sentence boundary, else ellipsis.
+    width = W - 2.0 * inch
+    size, floor_size, min_lines, max_lines = 17, 14, 3, 4
+
+    def sentences(text):
+        return [t for t in re.split(r"(?<=[.!?])\s+", text.strip()) if t]
+
+    def as_sentence(t):
+        t = t.strip()
+        return t if not t or t[-1] in ".!?\"'\u201d" else t + "."
+
+    def nlines(text, sz=size):
+        return len(wrap(text, EB, sz, width)) if text else 0
+
+    summ = as_sentence(closing_note) if closing_note else ""
+    if nlines(summ) < min_lines:
+        # opening sentences first, then the following sentences, answer order
+        pool = [sentences(a) for a in answers if a and a not in closing_note]
+        depth = 0
+        while nlines(summ) < min_lines and any(len(sl) > depth for sl in pool):
+            for sl in pool:
+                if depth >= len(sl) or nlines(summ) >= min_lines:
+                    continue
+                trial = (summ + " " + as_sentence(sl[depth])).strip()
+                if nlines(trial) > max_lines and nlines(summ) > 0:
+                    continue
+                summ = trial
+            depth += 1
+        if nlines(summ) < min_lines:
+            log.warning("Closing summation is only %d line(s): buyer gave too little text to fill 3 lines", nlines(summ))
     if summ:
-        width = W - 2.0 * inch
-        y0 = H - top - 188
-        floor_y = date_y + 34
-        size = 17
-        while True:
-            lead = size * 1.7
-            lines = wrap(summ, EB, size, width)
-            fit = int((y0 - floor_y) // lead) + 1
-            if len(lines) <= fit or size <= 11:
-                break
+        while nlines(summ, size) > max_lines and size > floor_size:
             size -= 0.5
-        if len(lines) > fit:
-            lines = lines[:fit]
+        sents = sentences(summ)
+        while nlines(" ".join(sents), size) > max_lines and len(sents) > 1:
+            sents.pop()
+        lines = wrap(" ".join(sents), EB, size, width)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
             last = lines[-1].rstrip(" .,;:") + "\u2026"
             while c.stringWidth(last, EB, size) > width and " " in last:
                 last = last.rsplit(" ", 1)[0].rstrip(" .,;:") + "\u2026"
             lines[-1] = last
+        log.info("Closing summation: %d line(s) at %.1fpt", len(lines), size)
+        lead = size * 1.7
         c.setFillColor(SLATE)
         c.setFont(EB, size)
-        y = y0
+        y = H - top - 188
         for line in lines:
             c.drawCentredString(W / 2, y, line)
             y -= lead
