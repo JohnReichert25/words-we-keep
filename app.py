@@ -48,6 +48,59 @@ def _by_qid(raw: dict) -> dict:
     return out
 
 
+UPLOAD_RE = re.compile(r"https?://[^\s\"',]*jotform[^\s\"',]*/uploads/[^\s\"',]+\.(?:jpe?g|png)", re.I)
+
+
+def _strings(val):
+    """Yield every string inside val (str/list/dict, nested; JSON strings are expanded)."""
+    if isinstance(val, dict):
+        for v in val.values():
+            yield from _strings(v)
+    elif isinstance(val, (list, tuple)):
+        for v in val:
+            yield from _strings(v)
+    elif isinstance(val, str):
+        t = val.strip()
+        if t[:1] in "[{":
+            try:
+                yield from _strings(json.loads(t))
+                return
+            except ValueError:
+                pass
+        yield val
+
+
+def _urls_in(val) -> list:
+    out = []
+    for s in _strings(val):
+        for part in re.split(r"[,\n\r]+", s):
+            part = part.strip()
+            if part.startswith("/uploads/"):
+                part = "https://www.jotform.com" + part
+            if re.match(r"https?://", part, re.I):
+                out.append(part)
+    return out
+
+
+def _find_photos(form: dict, raw: dict) -> list:
+    found = []
+    for key, val in raw.items():  # (a) q31 by prefix
+        if re.match(rf"q{F_PHOTOS}_", key):
+            found += _urls_in(val)
+    for key, val in raw.items():  # (b) keys mentioning photo/upload
+        if re.search(r"photo|upload", key, re.I):
+            found += _urls_in(val)
+    if not found:  # (c) any Jotform upload URL anywhere
+        for src in (raw, {k: v for k, v in form.items() if k != "rawRequest"}):
+            for s in _strings(src):
+                found += [m.group(0) for m in UPLOAD_RE.finditer(s)]
+    out = []
+    for u in found:
+        if u not in out:
+            out.append(u)
+    return out[:2]
+
+
 def parse_jotform(form: dict) -> dict:
     """Turn a Jotform webhook (multipart with rawRequest JSON) into run() input."""
     payload = dict(form)
@@ -69,8 +122,11 @@ def parse_jotform(form: dict) -> dict:
             payload[field] = _text(q.get(qid))
     if not payload.get("answers") and qids:
         payload["answers"] = [_text(q.get(n)) for n in qids]
-    photos = q.get(F_PHOTOS)
-    payload["photos"] = photos if isinstance(photos, list) else ([photos] if photos else [])
+    photos = _find_photos(form, raw if isinstance(raw, dict) else {})
+    payload["photos"] = photos
+    log.info("Jotform keys: form=%s rawRequest=%s; photo URLs found=%d %s",
+             sorted(form.keys()), sorted(raw.keys()) if isinstance(raw, dict) else [],
+             len(photos), [u.split("?")[0].split("#")[0] for u in photos])
     if not payload.get("date"):
         # Date printed on the PDF is the order/submission date.
         payload["date"] = datetime.now(ZoneInfo("America/New_York")).strftime("%B %-d, %Y")
