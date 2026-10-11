@@ -7,6 +7,14 @@ from __future__ import annotations
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from reportlab.lib.colors import Color
+from reportlab.lib.utils import ImageReader
+import io
+import logging
+import re
+import urllib.request
+
+log = logging.getLogger("wwk")
+MAX_PHOTO_BYTES = 15 * 1024 * 1024
 
 # Built-in fonts. Render does not have the local Garamond files.
 EB, EBI, EBB = "Times-Roman", "Times-Italic", "Times-Bold"
@@ -35,6 +43,53 @@ def answers_from(payload: dict) -> list[str]:
     raw = payload.get("answers") or []
     return [clean(a) for a in raw]
 
+def photo_urls(raw) -> list[str]:
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    out = []
+    for item in items:
+        if not item:
+            continue
+        for part in re.split(r"[,\n\r]+", str(item)):
+            part = part.strip()
+            if part:
+                out.append(part)
+    return out
+
+def fetch_photo(src: str):
+    """Return an ImageReader for a JPEG/PNG URL or local path, or None (never raises)."""
+    try:
+        from PIL import Image
+        if src.startswith(("http://", "https://")):
+            req = urllib.request.Request(src, headers={"User-Agent": "WordsWeKeep/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = r.read(MAX_PHOTO_BYTES + 1)
+        else:
+            path = src[7:] if src.startswith("file://") else src
+            with open(path, "rb") as f:
+                data = f.read(MAX_PHOTO_BYTES + 1)
+        if len(data) > MAX_PHOTO_BYTES:
+            log.warning("Photo skipped: larger than 15MB (%s)", src.split("?")[0])
+            return None
+        img = Image.open(io.BytesIO(data))
+        if img.format not in ("JPEG", "PNG"):
+            log.warning("Photo skipped: unsupported type %s (%s)", img.format, src.split("?")[0])
+            return None
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img.thumbnail((1800, 1800))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=88)
+        buf.seek(0)
+        return ImageReader(buf)
+    except Exception as e:
+        log.warning("Photo skipped: could not load %s (%s)", src.split("?")[0], type(e).__name__)
+        return None
+
 def run(payload: dict, out_path: str) -> str:
     product = payload.get("product") or "gave"
     writer = clean(payload.get("writer") or "Someone")
@@ -59,6 +114,23 @@ def run(payload: dict, out_path: str) -> str:
     closing = ". ".join(used[:3])
     if closing and not closing.endswith("."):
         closing += "."
+
+    photos = []
+    for src in photo_urls(payload.get("photos"))[:2]:
+        img = fetch_photo(src)
+        if img is not None:
+            photos.append(img)
+    placed = 0
+
+    def draw_photo(img, x0, y0, bw, bh):
+        iw, ih = img.getSize()
+        s = min(bw / iw, bh / ih)
+        dw, dh = iw * s, ih * s
+        x, y = x0 + (bw - dw) / 2, y0 + (bh - dh) / 2
+        c.drawImage(img, x, y, dw, dh)
+        c.setStrokeColor(GOLD)
+        c.setLineWidth(0.6)
+        c.rect(x - 4, y - 4, dw + 8, dh + 8, fill=0, stroke=1)
 
     c = canvas.Canvas(out_path, pagesize=(W, H))
     c.setTitle(f"{title} for {recipient}")
@@ -123,13 +195,19 @@ def run(payload: dict, out_path: str) -> str:
     c.showPage()
 
     cream()
+    dy = 0
+    if photos:
+        # Photo in the upper part of the dedication page; dedication text moves down.
+        draw_photo(photos[0], 0.9 * inch, H / 2 - 0.2 * inch, W - 1.8 * inch, H / 2 - 0.85 * inch)
+        placed += 1
+        dy = -1.6 * inch
     c.setFillColor(GOLD)
     c.setFont(EBI, 12)
-    c.drawCentredString(W / 2, H / 2 + 0.45 * inch, "For")
+    c.drawCentredString(W / 2, H / 2 + 0.45 * inch + dy, "For")
     c.setFont(EBB, 28)
-    c.drawCentredString(W / 2, H / 2, recipient)
+    c.drawCentredString(W / 2, H / 2 + dy, recipient)
     c.setFont(EBI, 13)
-    c.drawCentredString(W / 2, H / 2 - 0.4 * inch, f"from {writer}")
+    c.drawCentredString(W / 2, H / 2 - 0.4 * inch + dy, f"from {writer}")
     c.showPage()
 
     def block(name, sub, lines, y):
@@ -167,6 +245,10 @@ def run(payload: dict, out_path: str) -> str:
         c.showPage()
 
     cream()
+    if len(photos) > 1:
+        # Second photo above the closing note heading (space above it is otherwise empty).
+        draw_photo(photos[1], 1.1 * inch, H / 2 + 1.55 * inch, W - 2.2 * inch, H / 2 - 2.5 * inch)
+        placed += 1
     c.setFillColor(SLATE)
     c.setFont(EBB, 16)
     c.drawCentredString(W / 2, H / 2 + 1.2 * inch, "A Closing Note")
@@ -195,4 +277,5 @@ def run(payload: dict, out_path: str) -> str:
         c.drawCentredString(W / 2, H / 2 - 78, date)
     c.showPage()
     c.save()
+    log.info("Placed %d photo(s) in PDF", placed)
     return out_path
