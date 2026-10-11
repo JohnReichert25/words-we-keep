@@ -83,26 +83,101 @@ def _urls_in(val) -> list:
     return out
 
 
+def _upload_urls(val) -> list:
+    out = []
+    for u in _urls_in(val):
+        path = urllib.parse.urlsplit(u).path
+        if "/uploads/" in path and re.search(r"\.(?:jpe?g|png)$", path, re.I) and u not in out:
+            out.append(u)
+    return out
+
+
+def _fname(u) -> str:
+    return urllib.parse.unquote(urllib.parse.urlsplit(u).path.rsplit("/", 1)[-1]).lower() if u else ""
+
+
 def _find_photos(form: dict, raw: dict) -> list:
+    """Legacy (single 'optionalPhotos' field): order-based list of up to 2 photos."""
     found = []
-    for key, val in raw.items():  # (a) q31 by prefix
-        if re.match(rf"q{F_PHOTOS}_", key):
-            found += _urls_in(val)
-    for key, val in raw.items():  # (b) keys mentioning photo/upload
-        if re.search(r"photo|upload", key, re.I):
-            found += _urls_in(val)
-    if not found:  # (c) any Jotform upload URL anywhere
+    for key, val in raw.items():
+        if re.match(rf"q{F_PHOTOS}_", key) or re.search(r"photo|upload", key, re.I):
+            found += _upload_urls(val)
+    if not found:
         for src in (raw, {k: v for k, v in form.items() if k != "rawRequest"}):
             for s in _strings(src):
                 found += [m.group(0) for m in UPLOAD_RE.finditer(s)]
     out = []
-    for u in found:
-        path = urllib.parse.urlsplit(u).path
-        if "/uploads/" not in path or not re.search(r"\.(?:jpe?g|png)$", path, re.I):
-            continue
+    for u in _upload_urls(found):
         if u not in out:
             out.append(u)
     return out[:2]
+
+
+def _pretty_slots(pretty: str) -> dict:
+    """Parse Jotform 'pretty' ("Label:value, Label:value") into {slot: [filenames/urls]}."""
+    out = {}
+    if not pretty:
+        return out
+    # Split on ", Label:" boundaries (a colon not followed by // so URLs stay intact).
+    for pair in re.split(r",\s*(?=[^,:]{1,120}:(?!//))", pretty):
+        label, _, value = pair.partition(":")
+        lab = label.strip().lower()
+        slot = "dedication" if "dedication" in lab else "closing" if "closing" in lab else None
+        if slot and "photo" in lab:
+            out[slot] = [p.strip() for p in re.split(r"[,\n\r]+", value) if p.strip()]
+    return out
+
+
+def _photo_slots(form: dict, raw: dict) -> tuple:
+    """Return (dedication_url, closing_url, method). Slots are decided by field, never order."""
+    slots = {"dedication": None, "closing": None}
+    unassigned = []  # (qid, key, urls) for new-style photo fields we couldn't name
+    legacy = False
+    for key, val in raw.items():
+        urls = _upload_urls(val)
+        kl = key.lower()
+        if "optionalphotos" in kl:
+            legacy = legacy or bool(urls)
+            continue
+        if not urls:
+            continue
+        if "dedication" in kl:  # (a) key name
+            slots["dedication"] = slots["dedication"] or urls[0]
+        elif "closing" in kl:
+            slots["closing"] = slots["closing"] or urls[0]
+        elif re.search(r"photo|upload", kl):
+            m = re.match(r"q(\d+)_", key)
+            unassigned.append((int(m.group(1)) if m else 9999, key, urls))
+    method = "key"
+    if unassigned:
+        # (b) match labels in 'pretty' to uploaded filenames
+        pretty = _pretty_slots(str(form.get("pretty") or raw.get("pretty") or ""))
+        rest = []
+        for qid, key, urls in unassigned:
+            hit = None
+            for slot, vals in pretty.items():
+                names = {_fname(v) if "/" in v else v.lower() for v in vals}
+                if not slots[slot] and any(_fname(u) in names for u in urls):
+                    hit = slot
+                    break
+            if hit:
+                slots[hit] = urls[0]
+                method = "pretty"
+            else:
+                rest.append((qid, key, urls))
+        # (c) question id: dedication field sits before closing field on the form
+        rest.sort()
+        if rest and len(rest) == 2 and not any(slots.values()):
+            slots["dedication"], slots["closing"] = rest[0][2][0], rest[1][2][0]
+            method = "qid"
+        elif rest:
+            log.warning("Unmatched photo fields (not placed): %s", [k for _, k, _ in rest])
+    if not any(slots.values()) and legacy:  # (d) legacy single field: old order-based behavior
+        photos = _find_photos(form, raw)
+        slots["dedication"] = photos[0] if photos else None
+        slots["closing"] = photos[1] if len(photos) > 1 else None
+        method = "legacy"
+    return slots["dedication"], slots["closing"], method
 
 
 def parse_jotform(form: dict) -> dict:
@@ -126,11 +201,14 @@ def parse_jotform(form: dict) -> dict:
             payload[field] = _text(q.get(qid))
     if not payload.get("answers") and qids:
         payload["answers"] = [_text(q.get(n)) for n in qids]
-    photos = _find_photos(form, raw if isinstance(raw, dict) else {})
-    payload["photos"] = photos
-    log.info("Jotform keys: form=%s rawRequest=%s; photo URLs found=%d %s",
-             sorted(form.keys()), sorted(raw.keys()) if isinstance(raw, dict) else [],
-             len(photos), [u.split("?")[0].split("#")[0] for u in photos])
+    raw_d = raw if isinstance(raw, dict) else {}
+    ded, clo, method = _photo_slots(form, raw_d)
+    payload["dedication_photo"] = ded
+    payload["closing_photo"] = clo
+    payload["photos"] = [u for u in (ded, clo) if u]  # informational only; job uses the slots
+    log.info("Jotform keys: form=%s rawRequest=%s", sorted(form.keys()), sorted(raw_d.keys()))
+    log.info("Photo slots: dedication=%s closing=%s (via %s)",
+             _fname(ded) or "none", _fname(clo) or "none", method if (ded or clo) else "-")
     if not payload.get("date"):
         # Date printed on the PDF is the order/submission date.
         payload["date"] = datetime.now(ZoneInfo("America/New_York")).strftime("%B %-d, %Y")

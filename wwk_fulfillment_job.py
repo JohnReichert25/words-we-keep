@@ -198,11 +198,14 @@ def run(payload: dict, out_path: str) -> str:
     if closing and not closing.endswith("."):
         closing += "."
 
-    photos = []
-    for src in photo_urls(payload.get("photos"))[:2]:
-        img = fetch_photo(src, str(payload.get("submissionID") or ""))
-        if img is not None:
-            photos.append(img)
+    sid = str(payload.get("submissionID") or "")
+    if "dedication_photo" in payload or "closing_photo" in payload:
+        slot_srcs = [photo_urls(payload.get("dedication_photo"))[:1], photo_urls(payload.get("closing_photo"))[:1]]
+    else:  # older callers: ordered list
+        legacy = photo_urls(payload.get("photos"))[:2]
+        slot_srcs = [legacy[:1], legacy[1:2]]
+    ded_img = fetch_photo(slot_srcs[0][0], sid) if slot_srcs[0] else None
+    clo_img = fetch_photo(slot_srcs[1][0], sid) if slot_srcs[1] else None
     placed = 0
 
     def draw_photo(img, x0, y0, bw, bh):
@@ -279,9 +282,9 @@ def run(payload: dict, out_path: str) -> str:
 
     cream()
     dy = 0
-    if photos:
+    if ded_img is not None:
         # Photo in the upper part of the dedication page; dedication text moves down.
-        draw_photo(photos[0], 0.9 * inch, H / 2 - 0.2 * inch, W - 1.8 * inch, H / 2 - 0.85 * inch)
+        draw_photo(ded_img, 0.9 * inch, H / 2 - 0.2 * inch, W - 1.8 * inch, H / 2 - 0.85 * inch)
         placed += 1
         dy = -1.6 * inch
     c.setFillColor(GOLD)
@@ -328,9 +331,9 @@ def run(payload: dict, out_path: str) -> str:
         c.showPage()
 
     cream()
-    if len(photos) > 1:
-        # Second photo above the closing note heading (space above it is otherwise empty).
-        draw_photo(photos[1], 1.1 * inch, H / 2 + 1.55 * inch, W - 2.2 * inch, H / 2 - 2.5 * inch)
+    if clo_img is not None:
+        # Closing photo above the closing note heading (space above it is otherwise empty).
+        draw_photo(clo_img, 1.1 * inch, H / 2 + 1.55 * inch, W - 2.2 * inch, H / 2 - 2.5 * inch)
         placed += 1
     c.setFillColor(SLATE)
     c.setFont(EBB, 16)
