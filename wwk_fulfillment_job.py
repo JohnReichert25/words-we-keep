@@ -451,7 +451,7 @@ def run(payload: dict, out_path: str) -> str:
     c.drawCentredString(W / 2, H / 2 - 28, f"Created from {writer}'s memories for {recipient}")
     c.drawCentredString(W / 2, H / 2 - 46, "Just because.")
     if date:
-        c.drawCentredString(W / 2, H / 2 - 78, date)
+        c.drawCentredString(W / 2, H / 2 - 78, nice_date(date))
     c.showPage()
     c.save()
     log.info("Placed %d photo(s) in PDF", placed)
