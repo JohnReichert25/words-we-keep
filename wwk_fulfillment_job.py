@@ -10,6 +10,7 @@ from reportlab.lib.colors import Color
 from reportlab.lib.utils import ImageReader
 import io
 import logging
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -17,8 +18,20 @@ import urllib.request
 log = logging.getLogger("wwk")
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 
-# Built-in fonts. Render does not have the local Garamond files.
+# EB Garamond (OFL, bundled in fonts/). Falls back to built-in Times if the files can't be loaded.
 EB, EBI, EBB = "Times-Roman", "Times-Italic", "Times-Bold"
+_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+try:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    for _name, _file in (("EBGaramond", "EBGaramond-Regular.ttf"),
+                         ("EBGaramond-Italic", "EBGaramond-Italic.ttf"),
+                         ("EBGaramond-Medium", "EBGaramond-Medium.ttf")):
+        pdfmetrics.registerFont(TTFont(_name, os.path.join(_FONT_DIR, _file)))
+    EB, EBI, EBB = "EBGaramond", "EBGaramond-Italic", "EBGaramond-Medium"
+    log.info("Fonts loaded: EB Garamond (Regular, Italic, Medium) from %s", _FONT_DIR)
+except Exception as e:
+    log.warning("EB Garamond fonts could not be loaded from %s (%s); falling back to Times", _FONT_DIR, type(e).__name__)
 
 SLATE = Color(0x33 / 255, 0x40 / 255, 0x4F / 255)
 GOLD = Color(0xD9 / 255, 0x9A / 255, 0x1B / 255)
@@ -38,7 +51,9 @@ SEE_SECTIONS = [
 ]
 
 def clean(text: str) -> str:
-    return " ".join((text or "").replace("—", ", ").replace("–", ", ").split())
+    text = " ".join((text or "").replace("—", ", ").replace("–", ", ").split())
+    # Typographic apostrophe inside words only (you've -> you’ve); quotes are left alone.
+    return re.sub(r"(?<=\w)'(?=\w)", "\u2019", text)
 
 def nice_date(text: str) -> str:
     """'2026-10-11' -> 'October 11, 2026'; other formats pass through."""
@@ -183,6 +198,7 @@ def fetch_photo(src: str, submission_id: str = ""):
         return None
 
 def run(payload: dict, out_path: str) -> str:
+    log.info("PDF fonts: %s / %s / %s", EB, EBI, EBB)
     product = payload.get("product") or "gave"
     writer = clean(payload.get("writer") or "Someone")
     recipient = clean(payload.get("recipient") or "You")
